@@ -1,0 +1,12 @@
+.git
+.github
+.vscode
+.idea
+.DS_Store
+
+**/node_modules
+**/npm-debug.log
+
+terraform
+
+README.md

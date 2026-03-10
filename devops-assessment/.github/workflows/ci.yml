@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  test-build-push:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: eu-west-1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: devops-assessment/app/package.json
+
+      - name: Install dependencies
+        working-directory: devops-assessment/app
+        run: |
+          npm install --package-lock-only
+          npm ci
+
+      - name: Run tests
+        working-directory: devops-assessment/app
+        run: npm test
+
+      - name: Build Docker image
+        run: |
+          docker build -f devops-assessment/app/Dockerfile -t devops-assessment-api:ci .
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push to ECR (latest + sha)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_SHA: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
+          docker build -f devops-assessment/app/Dockerfile -t "$IMAGE_URI:latest" -t "$IMAGE_URI:$IMAGE_SHA" .
+          docker push "$IMAGE_URI:latest"
+          docker push "$IMAGE_URI:$IMAGE_SHA"
+
