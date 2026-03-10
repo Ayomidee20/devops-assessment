@@ -10,12 +10,15 @@ permissions:
   contents: read
   id-token: write
 
-jobs:
-  test-build-push:
-    runs-on: ubuntu-latest
+env:
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  APP_DIR: devops-assessment/app
 
-    env:
-      AWS_REGION: eu-west-1
+jobs:
+  test:
+    name: Install & Test
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -26,43 +29,45 @@ jobs:
         with:
           node-version: 18
           cache: npm
-          cache-dependency-path: devops-assessment/app/package.json
+          cache-dependency-path: ${{ env.APP_DIR }}/package-lock.json
 
       - name: Install dependencies
-        working-directory: devops-assessment/app
-        run: |
-          npm install --package-lock-only
-          npm ci
+        working-directory: ${{ env.APP_DIR }}
+        run: npm ci
 
       - name: Run tests
-        working-directory: devops-assessment/app
+        working-directory: ${{ env.APP_DIR }}
         run: npm test
 
-      - name: Build Docker image
-        run: |
-          docker build -f devops-assessment/app/Dockerfile -t devops-assessment-api:ci .
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials (OIDC)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push to ECR (latest + sha)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Build and push to ECR
         env:
-          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_URI: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
           IMAGE_SHA: ${{ github.sha }}
         run: |
-          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY"
-          docker build -f devops-assessment/app/Dockerfile -t "$IMAGE_URI:latest" -t "$IMAGE_URI:$IMAGE_SHA" .
+          docker build \
+            -f ${{ env.APP_DIR }}/Dockerfile \
+            -t "$IMAGE_URI:latest" \
+            -t "$IMAGE_URI:$IMAGE_SHA" \
+            .
           docker push "$IMAGE_URI:latest"
           docker push "$IMAGE_URI:$IMAGE_SHA"
-
