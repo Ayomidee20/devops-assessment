@@ -73,6 +73,7 @@ jobs:
           IMAGE_URI: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
           IMAGE_SHA: ${{ github.sha }}
         run: |
+          set -e
           docker build \
             -f ${{ env.APP_DIR }}/Dockerfile \
             -t "$IMAGE_URI:latest" \
@@ -97,6 +98,14 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Confirm image URI
+        run: |
+          echo "Using image URI: '${{ needs.build-push.outputs.image_uri }}'"
+          if [ -z "${{ needs.build-push.outputs.image_uri }}" ]; then
+            echo "ERROR: image_uri from build-push job is empty."
+            exit 1
+          fi
 
       - name: Download current task definition
         run: |
