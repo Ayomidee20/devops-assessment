@@ -50,9 +50,6 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    outputs:
-      image_uri: ${{ steps.build.outputs.image_uri }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,7 +65,6 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push to ECR
-        id: build
         env:
           IMAGE_URI: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
           IMAGE_SHA: ${{ github.sha }}
@@ -81,7 +77,6 @@ jobs:
             .
           docker push "$IMAGE_URI:latest"
           docker push "$IMAGE_URI:$IMAGE_SHA"
-          echo "image_uri=$IMAGE_URI:$IMAGE_SHA" >> "$GITHUB_OUTPUT"
 
   deploy-ecs:
     name: Deploy to ECS
@@ -99,13 +94,20 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Confirm image URI
+      - name: Login to Amazon ECR (for registry URL)
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image URI
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          SHA: ${{ github.sha }}
         run: |
-          echo "Using image URI: '${{ needs.build-push.outputs.image_uri }}'"
-          if [ -z "${{ needs.build-push.outputs.image_uri }}" ]; then
-            echo "ERROR: image_uri from build-push job is empty."
-            exit 1
-          fi
+          IMAGE_URI="$REGISTRY/$REPOSITORY:$SHA"
+          echo "IMAGE_URI=$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
       - name: Download current task definition
         run: |
@@ -120,7 +122,7 @@ jobs:
         with:
           task-definition: task-definition.json
           container-name: ${{ env.ECS_CONTAINER_NAME }}
-          image: ${{ needs.build-push.outputs.image_uri }}
+          image: ${{ steps.image.outputs.image_uri }}
 
       - name: Deploy to ECS service
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
