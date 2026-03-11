@@ -305,10 +305,3 @@ resource "aws_ecs_service" "api" {
 
   depends_on = [aws_lb_listener.http]
 }
-
-
-# OUTPUT
-
-output "alb_url" {
-  value = "http://${aws_lb.this.dns_name}"
-}
