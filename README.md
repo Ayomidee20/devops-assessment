@@ -107,13 +107,14 @@ On pull requests to `main`:
 On pushes to `main`:
 - Runs the same test job as for pull requests
 - Authenticates to AWS using **OIDC** (no long‑lived AWS keys in GitHub)
+- Logs in to both **Amazon ECR** and **Docker Hub**
 - Builds the Docker image for the `api` container
-- Pushes the image to Amazon ECR tagged as:
-  - `latest`
-  - the commit SHA
-- Computes the immutable image URI (`<account>.dkr.ecr.<region>.amazonaws.com/<repository>:<sha>`)
+- Pushes the image to:
+  - **Amazon ECR** tagged as `latest` and the commit SHA
+  - **Docker Hub** tagged as `latest` and the commit SHA
+- Computes the immutable ECR image URI (`<account>.dkr.ecr.<region>.amazonaws.com/<repository>:<sha>`)
 - Downloads the current ECS task definition for the service
-- Renders a new task definition that updates the `api` container image to the new URI
+- Renders a new task definition that updates the `api` container image to the new ECR URI
 - Deploys the updated task definition to the ECS service (rolling deployment, waits for stability)
 
 This gives you **CI** (tests on every PR and push) and **CD** (automatic deploy of `main` to ECS Fargate).
@@ -126,6 +127,9 @@ This gives you **CI** (tests on every PR and push) and **CD** (automatic deploy 
 - `ECS_SERVICE`: ECS service name (e.g. `devops-assessment-service`)
 - `ECS_TASK_FAMILY`: ECS task definition family (e.g. `devops-assessment-task`)
 - `ECS_CONTAINER_NAME`: Container name inside the task definition that receives new images (e.g. `api`)
+- `DOCKERHUB_USERNAME`: Docker Hub account username
+- `DOCKERHUB_TOKEN`: Docker Hub access token (used for `docker login`)
+- `DOCKERHUB_REPOSITORY`: Docker Hub repository name (e.g. `username/devops-assessment-api`)
 
 ## Deploy infrastructure (Terraform)
 
@@ -171,6 +175,7 @@ Key variables are defined in `terraform/variables.tf`:
 - **Least privilege (assessment‑appropriate)**: ECS execution role uses the AWS managed execution policy; the task role is intentionally minimal
 - **Network controls**: security groups only allow inbound traffic from the ALB to the application port; all other inbound traffic to the tasks is denied
 - **Centralised logging**: application and Redis logs are sent to CloudWatch Logs
+- **HTTPS / TLS (not implemented in this submission)**: enabling HTTPS on the ALB via ACM requires a verified domain and DNS control (typically Route53 validation). This was not available in the assessment environment due to domain/provider constraints. In production, I would provision an ACM certificate for the application domain, add an HTTPS listener on port `443`, and redirect HTTP (`80`) to HTTPS (`443`).
 
 ## Design decisions
 
