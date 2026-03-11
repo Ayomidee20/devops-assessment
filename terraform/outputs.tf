@@ -8,9 +8,14 @@ output "alb_dns_name" {
   value       = aws_lb.this.dns_name
 }
 
-output "api_url" {
-  description = "Public API base URL (HTTPS)."
-  value       = "https://${var.api_fqdn}"
+output "alb_url" {
+  description = "Base URL for ALB (HTTP)."
+  value       = "http://${aws_lb.this.dns_name}"
+}
+
+output "health_url" {
+  description = "Health check URL."
+  value       = "http://${aws_lb.this.dns_name}/health"
 }
 
 output "ecr_repository_url" {

@@ -6,12 +6,12 @@ locals {
   azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
 
   public_subnet_cidrs  = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 8, i)]
-  private_subnet_cidrs = [for i in range(var.az_count) : cidrsubnet(var.vpc_cidr, 8, i + 100)]
 
   name = var.project_name
-
-  hosted_zone_name_normalized = endswith(var.hosted_zone_name, ".") ? var.hosted_zone_name : "${var.hosted_zone_name}."
 }
+
+
+# VPC
 
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
@@ -31,6 +31,8 @@ resource "aws_internet_gateway" "this" {
   }
 }
 
+# SUBNETS
+
 resource "aws_subnet" "public" {
   for_each = { for idx, az in local.azs : az => idx }
 
@@ -44,17 +46,7 @@ resource "aws_subnet" "public" {
   }
 }
 
-resource "aws_subnet" "private" {
-  for_each = { for idx, az in local.azs : az => idx }
-
-  vpc_id            = aws_vpc.this.id
-  availability_zone = each.key
-  cidr_block        = local.private_subnet_cidrs[each.value]
-
-  tags = {
-    Name = "${local.name}-private-${each.key}"
-  }
-}
+# ROUTING
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
@@ -77,88 +69,34 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_eip" "nat" {
-  domain = "vpc"
-  tags = {
-    Name = "${local.name}-nat-eip"
-  }
-}
 
-resource "aws_nat_gateway" "this" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = values(aws_subnet.public)[0].id
+# SECURITY GROUPS
 
-  tags = {
-    Name = "${local.name}-nat"
-  }
-
-  depends_on = [aws_internet_gateway.this]
-}
-
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.this.id
-
-  tags = {
-    Name = "${local.name}-private-rt"
-  }
-}
-
-resource "aws_route" "private_nat" {
-  route_table_id         = aws_route_table.private.id
-  destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.this.id
-}
-
-resource "aws_route_table_association" "private" {
-  for_each = aws_subnet.private
-
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.private.id
-}
 
 resource "aws_security_group" "alb" {
-  name        = "${local.name}-alb-sg"
-  description = "ALB security group"
-  vpc_id      = aws_vpc.this.id
+  name   = "${local.name}-alb-sg"
+  vpc_id = aws_vpc.this.id
 
   ingress {
-    description      = "HTTP from Internet"
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  ingress {
-    description      = "HTTPS from Internet"
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
-    description = "All egress"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = {
-    Name = "${local.name}-alb-sg"
-  }
 }
 
 resource "aws_security_group" "ecs" {
-  name        = "${local.name}-ecs-sg"
-  description = "ECS tasks security group"
-  vpc_id      = aws_vpc.this.id
+  name   = "${local.name}-ecs-sg"
+  vpc_id = aws_vpc.this.id
 
   ingress {
-    description     = "App traffic from ALB"
     from_port       = var.container_port
     to_port         = var.container_port
     protocol        = "tcp"
@@ -166,66 +104,21 @@ resource "aws_security_group" "ecs" {
   }
 
   egress {
-    description = "All egress"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = {
-    Name = "${local.name}-ecs-sg"
-  }
 }
 
-data "aws_route53_zone" "this" {
-  name         = local.hosted_zone_name_normalized
-  private_zone = false
-}
+# LOAD BALANCER
 
-resource "aws_acm_certificate" "api" {
-  domain_name       = var.api_fqdn
-  validation_method = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = {
-    Name = "${local.name}-cert"
-  }
-}
-
-resource "aws_route53_record" "api_cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.api.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
-
-  zone_id = data.aws_route53_zone.this.zone_id
-  name    = each.value.name
-  type    = each.value.type
-  ttl     = 60
-  records = [each.value.record]
-}
-
-resource "aws_acm_certificate_validation" "api" {
-  certificate_arn         = aws_acm_certificate.api.arn
-  validation_record_fqdns = [for record in aws_route53_record.api_cert_validation : record.fqdn]
-}
 
 resource "aws_lb" "this" {
   name               = "${local.name}-alb"
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = [for s in aws_subnet.public : s.id]
-
-  tags = {
-    Name = "${local.name}-alb"
-  }
 }
 
 resource "aws_lb_target_group" "api" {
@@ -237,15 +130,10 @@ resource "aws_lb_target_group" "api" {
 
   health_check {
     path                = "/health"
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
     interval            = 15
     timeout             = 5
-    matcher             = "200"
-  }
-
-  tags = {
-    Name = "${local.name}-tg"
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
   }
 }
 
@@ -255,85 +143,34 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
-
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-    }
-  }
-}
-
-resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.this.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate_validation.api.certificate_arn
-
-  default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
   }
 }
 
-resource "aws_route53_record" "api_alias" {
-  zone_id = data.aws_route53_zone.this.zone_id
-  name    = var.api_fqdn
-  type    = "A"
 
-  alias {
-    name                   = aws_lb.this.dns_name
-    zone_id                = aws_lb.this.zone_id
-    evaluate_target_health = true
-  }
-}
-
-resource "aws_route53_record" "api_alias_aaaa" {
-  zone_id = data.aws_route53_zone.this.zone_id
-  name    = var.api_fqdn
-  type    = "AAAA"
-
-  alias {
-    name                   = aws_lb.this.dns_name
-    zone_id                = aws_lb.this.zone_id
-    evaluate_target_health = true
-  }
-}
+# ECR
 
 resource "aws_ecr_repository" "api" {
-  name                 = "${local.name}-api"
-  image_tag_mutability = "MUTABLE"
+  name = "${local.name}-api"
 
   image_scanning_configuration {
     scan_on_push = true
   }
 }
 
-resource "aws_ecr_lifecycle_policy" "api" {
-  repository = aws_ecr_repository.api.name
 
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 25 images"
-        selection = {
-          tagStatus     = "any"
-          countType     = "imageCountMoreThan"
-          countNumber   = 25
-        }
-        action = { type = "expire" }
-      }
-    ]
-  })
-}
+# LOGGING
+
 
 resource "aws_cloudwatch_log_group" "api" {
   name              = "/ecs/${local.name}-api"
   retention_in_days = 14
 }
+
+
+# ECS
+
 
 resource "aws_ecs_cluster" "this" {
   name = "${local.name}-cluster"
@@ -344,13 +181,11 @@ resource "aws_iam_role" "ecs_task_execution" {
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = { Service = "ecs-tasks.amazonaws.com" }
-        Action = "sts:AssumeRole"
-      }
-    ]
+    Statement = [{
+      Effect = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action = "sts:AssumeRole"
+    }]
   })
 }
 
@@ -364,15 +199,16 @@ resource "aws_iam_role" "ecs_task" {
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = { Service = "ecs-tasks.amazonaws.com" }
-        Action = "sts:AssumeRole"
-      }
-    ]
+    Statement = [{
+      Effect = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action = "sts:AssumeRole"
+    }]
   })
 }
+
+# TASK DEFINITION
+
 
 resource "aws_ecs_task_definition" "api" {
   family                   = "${local.name}-task"
@@ -435,6 +271,9 @@ resource "aws_ecs_task_definition" "api" {
   ])
 }
 
+# ECS SERVICE
+
+
 resource "aws_ecs_service" "api" {
   name            = "${local.name}-service"
   cluster         = aws_ecs_cluster.this.id
@@ -442,10 +281,12 @@ resource "aws_ecs_service" "api" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  force_new_deployment = true
+
   network_configuration {
-    subnets          = [for s in aws_subnet.private : s.id]
+    subnets          = [for s in aws_subnet.public : s.id]
     security_groups  = [aws_security_group.ecs.id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
 
   load_balancer {
@@ -462,8 +303,12 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
 
-  health_check_grace_period_seconds = 30
-
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.http]
 }
 
+
+# OUTPUT
+
+output "alb_url" {
+  value = "http://${aws_lb.this.dns_name}"
+}

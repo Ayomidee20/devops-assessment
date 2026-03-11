@@ -22,18 +22,6 @@ variable "az_count" {
   default     = 2
 }
 
-variable "hosted_zone_name" {
-  type        = string
-  description = "Route53 hosted zone name (e.g., example.com)."
-  default     = "example.com"
-}
-
-variable "api_fqdn" {
-  type        = string
-  description = "FQDN for the API (e.g., api.example.com)."
-  default     = "api.example.com"
-}
-
 variable "container_port" {
   type        = number
   description = "Container port for the Node.js API."
